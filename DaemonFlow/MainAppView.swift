@@ -56,6 +56,14 @@ struct MainAppView: View {
                     .foregroundStyle(Theme.textSecondary)
             }
 
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Hold Fn and speak to dictate.")
+                Text("Select text, then tap ⌥1 to clean it up — or hold ⌥1 and say how to change it (\u{201C}make it formal\u{201D}).")
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+
             if hotkeyManager.needsAccessibilityPermission {
                 Text("Accessibility permission not granted")
                     .font(.system(size: 12))
@@ -185,6 +193,15 @@ struct MainAppView: View {
                 }
 
                 Spacer()
+
+                if !appState.transcriptHistory.isEmpty {
+                    Button("Clear") {
+                        appState.clearTranscriptHistory()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                }
             }
 
             if let error = appState.transcriptionError {
@@ -201,16 +218,7 @@ struct MainAppView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(appState.transcriptHistory) { entry in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.date, style: .time)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(Theme.textSecondary.opacity(0.7))
-                                Text(entry.text)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(Theme.textPrimary)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
+                            transcriptRow(entry)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -225,6 +233,45 @@ struct MainAppView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Theme.cardBorder, lineWidth: 1)
         )
+    }
+
+    /// Cleaned text on top (that's what got pasted), the untouched Whisper
+    /// output indented beneath it behind a "RAW" rule — visible without a
+    /// click, but clearly subordinate. Omitted entirely when cleanup didn't
+    /// change anything, since two identical blocks would just be noise.
+    private func transcriptRow(_ entry: TranscriptEntry) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(entry.date, format: .dateTime.month(.abbreviated).day().hour().minute())
+                .font(Theme.Font.monoLabel)
+                .foregroundStyle(Theme.textSecondary.opacity(0.7))
+
+            Text(entry.text)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if entry.hasDistinctRawText {
+                HStack(alignment: .top, spacing: 8) {
+                    Rectangle()
+                        .fill(Theme.cardBorder)
+                        .frame(width: 1)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("RAW")
+                            .font(Theme.Font.monoLabel)
+                            .foregroundStyle(Theme.textSecondary.opacity(0.55))
+                        Text(entry.rawText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.bottom, 4)
     }
 
     private var selectedModelLabel: String {

@@ -16,10 +16,19 @@ nonisolated enum HUDState: Equatable {
     case hidden
     case recording
     case processing
+    /// ⌥1 is being held — the user is speaking an edit instruction. Shows
+    /// the live meter behind a wand glyph, so it reads as "listening, but
+    /// not dictation".
+    case instructing
     /// ⌥1 selection refine in flight — shows a shimmering "Refining" label.
     case refining
     /// Refine finished and pasted — brief "Done" confirmation before hiding.
     case done
+
+    /// States where the microphone is open and the waveform should track it.
+    var showsLiveMeter: Bool {
+        self == .recording || self == .instructing
+    }
 }
 
 @MainActor
@@ -136,6 +145,14 @@ struct RecordingHUDView: View {
             case .processing:
                 HUDSpinner()
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
+            case .instructing:
+                HStack(spacing: 6) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                    waveform
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.85)))
             case .refining:
                 ShimmerText(text: "Refining")
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
@@ -165,12 +182,12 @@ struct RecordingHUDView: View {
         .shadow(color: .black.opacity(0.35), radius: 7, x: 0, y: 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(meterTick) { _ in
-            guard model.state == .recording else { return }
+            guard model.state.showsLiveMeter else { return }
             levelHistory.removeFirst()
             levelHistory.append(audio.currentLevel())
         }
         .onChange(of: model.state) { _, newState in
-            if newState != .recording {
+            if !newState.showsLiveMeter {
                 levelHistory = Array(repeating: 0, count: Self.barCount)
             }
         }
