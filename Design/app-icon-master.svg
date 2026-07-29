@@ -1,0 +1,39 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#101319"/>
+      <stop offset="1" stop-color="#0A0C10"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#9B80FF"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#7C5CFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#7C5CFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- squircle background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#sheen)"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="226.5" ry="226.5" fill="none" stroke="#242832" stroke-opacity="0.6" stroke-width="3"/>
+
+  <!-- soft signal glow behind the waveform -->
+  <circle cx="512" cy="512" r="330" fill="url(#glow)"/>
+
+  <!-- waveform mark: six bars, asymmetric heights (echoes the in-app
+       "recommended model" waveform motif for brand continuity) -->
+  <g fill="url(#bar)">
+    <rect x="200" y="427" width="64" height="170" rx="32"/>
+    <rect x="312" y="359.5" width="64" height="305" rx="32"/>
+    <rect x="424" y="292" width="64" height="440" rx="32"/>
+    <rect x="536" y="377" width="64" height="270" rx="32"/>
+    <rect x="648" y="324.5" width="64" height="375" rx="32"/>
+    <rect x="760" y="409.5" width="64" height="205" rx="32"/>
+  </g>
+</svg>

@@ -1,0 +1,36 @@
+<svg width="560" height="140" viewBox="0 0 560 140" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="mark-bg" x1="0" y1="0" x2="140" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#101319"/>
+      <stop offset="1" stop-color="#0A0C10"/>
+    </linearGradient>
+    <linearGradient id="mark-bar" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#9B80FF"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+    <radialGradient id="mark-glow" cx="0.5" cy="0.5" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#7C5CFF" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#7C5CFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- mark: identical dark badge — reads fine as a contained mark on light backgrounds -->
+  <g transform="translate(0,0)">
+    <rect x="0" y="0" width="140" height="140" rx="31" ry="31" fill="url(#mark-bg)"/>
+    <rect x="0.5" y="0.5" width="139" height="139" rx="30.5" ry="30.5" fill="none" stroke="#242832" stroke-opacity="0.6" stroke-width="1"/>
+    <circle cx="70" cy="70" r="45" fill="url(#mark-glow)"/>
+    <g fill="url(#mark-bar)">
+      <rect x="27.3" y="58.4" width="8.75" height="23.3" rx="4.375"/>
+      <rect x="42.7" y="49.3" width="8.75" height="41.8" rx="4.375"/>
+      <rect x="58" y="40" width="8.75" height="60.2" rx="4.375"/>
+      <rect x="73.3" y="51.6" width="8.75" height="37" rx="4.375"/>
+      <rect x="88.7" y="44.4" width="8.75" height="51.4" rx="4.375"/>
+      <rect x="104" y="56.1" width="8.75" height="28.1" rx="4.375"/>
+    </g>
+  </g>
+
+  <!-- wordmark: dark "Daemon" for legibility on a light backdrop, same accent "Flow" -->
+  <text x="172" y="86" font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="52" font-weight="600" letter-spacing="-0.5">
+    <tspan fill="#14171D">Daemon</tspan><tspan fill="#7C5CFF">Flow</tspan>
+  </text>
+</svg>

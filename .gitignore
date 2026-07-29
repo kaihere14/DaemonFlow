@@ -1,0 +1,11 @@
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# whisper.cpp build artifacts — regenerate with scripts/build-whisper.sh
+Vendor/whisper-libs/
+Vendor/whisper.cpp/build-daemonflow/
+
+# macOS
+.DS_Store
