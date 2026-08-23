@@ -9,6 +9,9 @@ struct MainAppView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var hotkeyManager: HotkeyManager
     @EnvironmentObject private var audioCaptureManager: AudioCaptureManager
+    @EnvironmentObject private var vocabularyStore: VocabularyStore
+    @EnvironmentObject private var hudSettings: HUDSettingsStore
+    @EnvironmentObject private var promptStore: PromptStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -34,6 +37,18 @@ struct MainAppView: View {
         .sheet(isPresented: $appState.isPresentingCleanupLab) {
             DebugCleanupView(onClose: { appState.isPresentingCleanupLab = false })
                 .frame(minWidth: 600, minHeight: 520)
+        }
+        .sheet(isPresented: $appState.isPresentingHUDAppearance) {
+            HUDAppearanceView(onClose: { appState.isPresentingHUDAppearance = false })
+                .frame(minWidth: 560, minHeight: 620)
+        }
+        .sheet(isPresented: $appState.isPresentingPrompts) {
+            PromptsView(onClose: { appState.isPresentingPrompts = false })
+                .frame(minWidth: 620, minHeight: 620)
+        }
+        .sheet(isPresented: $appState.isPresentingVocabulary) {
+            VocabularyView(onClose: { appState.isPresentingVocabulary = false })
+                .frame(minWidth: 560, minHeight: 480)
         }
     }
 
@@ -103,8 +118,8 @@ struct MainAppView: View {
     private var modelStatusCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             modelRow(
-                title: "Whisper model",
-                value: appState.modelDownloadManager.selectedFileName ?? "None selected",
+                title: "Transcription model",
+                value: appState.modelDownloadManager.selectedModelDisplayName ?? "None selected",
                 buttonTitle: "Change Model"
             ) {
                 appState.isPresentingModelPicker = true
@@ -118,6 +133,44 @@ struct MainAppView: View {
                 buttonTitle: "Change Cleanup Model"
             ) {
                 appState.isPresentingCleanupPicker = true
+            }
+
+            Divider().overlay(Theme.cardBorder)
+
+            modelRow(
+                title: "Custom vocabulary",
+                value: vocabularyLabel,
+                buttonTitle: "Edit Dictionary"
+            ) {
+                appState.isPresentingVocabulary = true
+            }
+
+            Divider().overlay(Theme.cardBorder)
+
+            toggleRow(
+                title: "Always show the pill",
+                subtitle: "Keeps a thin bar above the Dock between dictations. It grows into the waveform when you start speaking.",
+                isOn: $hudSettings.alwaysVisible
+            )
+
+            Divider().overlay(Theme.cardBorder)
+
+            modelRow(
+                title: "Pill appearance",
+                value: pillSizeLabel,
+                buttonTitle: "Customize"
+            ) {
+                appState.isPresentingHUDAppearance = true
+            }
+
+            Divider().overlay(Theme.cardBorder)
+
+            modelRow(
+                title: "Prompts",
+                value: promptsLabel,
+                buttonTitle: "Edit Prompts"
+            ) {
+                appState.isPresentingPrompts = true
             }
 
             HStack {
@@ -170,11 +223,59 @@ struct MainAppView: View {
         }
     }
 
+    private func toggleRow(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 16)
+
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+        }
+    }
+
     private var cleanupModelLabel: String {
         guard let repoID = appState.cleanupModelManager.selectedHubRepoID else {
             return "None selected"
         }
         return CleanupModelCatalog.model(forHubRepoID: repoID)?.displayName ?? repoID
+    }
+
+    private var pillSizeLabel: String {
+        let appearance = hudSettings.appearance
+        return "\(Int(appearance.restingWidth))×\(Int(appearance.restingHeight)) resting · "
+            + "\(Int(appearance.activeWidth))×\(Int(appearance.activeHeight)) active"
+    }
+
+    private var promptsLabel: String {
+        // Reading `revision` keeps this label live: the counts come out of
+        // UserDefaults, which doesn't publish on its own.
+        _ = promptStore.revision
+        let edited = promptStore.customizedCount
+        switch edited {
+        case 0: return "\(PromptKind.allCases.count) prompts · all default"
+        case 1: return "\(PromptKind.allCases.count) prompts · 1 edited"
+        default: return "\(PromptKind.allCases.count) prompts · \(edited) edited"
+        }
+    }
+
+    private var vocabularyLabel: String {
+        let count = vocabularyStore.terms.count
+        switch count {
+        case 0: return "No custom terms"
+        case 1: return "1 term"
+        default: return "\(count) terms"
+        }
     }
 
     private var transcriptCard: some View {
@@ -273,10 +374,6 @@ struct MainAppView: View {
         }
         .padding(.bottom, 4)
     }
-
-    private var selectedModelLabel: String {
-        appState.modelDownloadManager.selectedFileName ?? "None selected"
-    }
 }
 
 #Preview {
@@ -285,4 +382,6 @@ struct MainAppView: View {
         .environmentObject(appState)
         .environmentObject(appState.hotkeyManager)
         .environmentObject(appState.audioCaptureManager)
+        .environmentObject(appState.vocabularyStore)
+        .environmentObject(appState.hudSettings)
 }

@@ -44,6 +44,9 @@ struct OnboardingView: View {
                         ForEach(WhisperModelCatalog.all) { model in
                             WhisperModelCard(model: model)
                         }
+                        ForEach(ParakeetModelCatalog.all) { model in
+                            ParakeetModelCard(model: model)
+                        }
                     } else {
                         ForEach(CleanupModelCatalog.all) { model in
                             CleanupModelCard(model: model)
@@ -77,7 +80,7 @@ struct OnboardingView: View {
                     .foregroundStyle(Theme.textPrimary)
 
                 Text(step == 1
-                     ? "Transcribes your speech locally. You can change this anytime from Settings."
+                     ? "Transcribes your speech locally — Whisper or Parakeet. You can change this anytime from Settings."
                      : "Polishes raw transcripts — removes fillers, applies self-corrections. Change anytime from Settings.")
                     .font(Theme.Font.body)
                     .foregroundStyle(Theme.textSecondary)
@@ -109,25 +112,25 @@ struct OnboardingView: View {
             } label: {
                 Text("Continue")
                     .font(Theme.Font.body.weight(.medium))
-                    .foregroundStyle(whisperSelected ? Theme.textPrimary : Theme.textSecondary)
+                    .foregroundStyle(transcriptionModelSelected ? Theme.textPrimary : Theme.textSecondary)
                     .padding(.horizontal, 22)
                     .frame(height: 34)
             }
             .buttonStyle(.plain)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(whisperSelected ? Theme.accent.opacity(0.16) : .clear)
+                    .fill(transcriptionModelSelected ? Theme.accent.opacity(0.16) : .clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(whisperSelected ? Theme.accent : Theme.cardBorder, lineWidth: 1)
+                    .stroke(transcriptionModelSelected ? Theme.accent : Theme.cardBorder, lineWidth: 1)
             )
-            .disabled(!whisperSelected)
+            .disabled(!transcriptionModelSelected)
         }
     }
 
-    private var whisperSelected: Bool {
-        downloadManager.selectedFileName != nil
+    private var transcriptionModelSelected: Bool {
+        downloadManager.hasUsableTranscriptionModel
     }
 }
 
@@ -135,6 +138,37 @@ struct OnboardingView: View {
 
 private struct WhisperModelCard: View {
     let model: WhisperModel
+    @EnvironmentObject private var downloadManager: ModelDownloadManager
+
+    var body: some View {
+        ModelSelectionCard(
+            title: model.displayName,
+            tagline: model.tagline,
+            stats: [
+                ModelStat(label: "SIZE", value: model.sizeDescription),
+                ModelStat(label: "SPEED", value: model.speedDescription),
+                ModelStat(label: "ACCURACY", value: model.accuracyDescription),
+            ],
+            recommended: model.recommended,
+            status: status,
+            errorText: downloadManager.errorByModelID[model.id],
+            downloadAction: { downloadManager.downloadModel(model) },
+            selectAction: { downloadManager.selectModel(model) }
+        )
+    }
+
+    private var status: ModelCardStatus {
+        if downloadManager.isSelected(model) { return .selected }
+        if downloadManager.downloadingModelIDs.contains(model.id) {
+            return .downloading(progress: downloadManager.progressByModelID[model.id] ?? 0)
+        }
+        if downloadManager.isModelDownloaded(model) { return .downloaded }
+        return .notDownloaded
+    }
+}
+
+private struct ParakeetModelCard: View {
+    let model: ParakeetModel
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     var body: some View {

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E9A9E59C303A90650082AA51 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E9AB000D00000000000000FD /* FluidAudio */; };
 		E9AB000400000000000000F4 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E9AB000200000000000000F2 /* MLXLLM */; };
 		E9AB000500000000000000F5 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E9AB000300000000000000F3 /* MLXLMCommon */; };
 		E9AB000800000000000000F8 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E9AB000700000000000000F7 /* HuggingFace */; };
@@ -29,6 +30,7 @@
 		E92289B9301964E5000DBE4F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				E9A9E59C303A90650082AA51 /* FluidAudio in Frameworks */,
 				E9AB000400000000000000F4 /* MLXLLM in Frameworks */,
 				E9AB000500000000000000F5 /* MLXLMCommon in Frameworks */,
 				E9AB000800000000000000F8 /* HuggingFace in Frameworks */,
@@ -76,6 +78,7 @@
 				E9AB000300000000000000F3 /* MLXLMCommon */,
 				E9AB000700000000000000F7 /* HuggingFace */,
 				E9AB000A00000000000000FA /* Transformers */,
+				E9AB000D00000000000000FD /* FluidAudio */,
 			);
 			productName = DaemonFlow;
 			productReference = E92289BC301964E5000DBE4F /* DaemonFlow.app */;
@@ -109,6 +112,7 @@
 				E9AB000100000000000000F1 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				E9AB000600000000000000F6 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				E9AB000900000000000000F9 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				E9AB000C00000000000000FC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E92289BD301964E5000DBE4F /* Products */;
@@ -417,6 +421,14 @@
 				minimumVersion = 1.3.0;
 			};
 		};
+		E9AB000C00000000000000FC /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.15.6;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -439,6 +451,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E9AB000900000000000000F9 /* XCRemoteSwiftPackageReference "swift-transformers" */;
 			productName = Transformers;
+		};
+		E9AB000D00000000000000FD /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E9AB000C00000000000000FC /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

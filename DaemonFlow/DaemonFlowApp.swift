@@ -47,6 +47,9 @@ struct DaemonFlowApp: App {
             .environmentObject(appState.modelDownloadManager)
             .environmentObject(appState.cleanupModelManager)
             .environmentObject(appState.audioCaptureManager)
+            .environmentObject(appState.vocabularyStore)
+            .environmentObject(appState.hudSettings)
+            .environmentObject(appState.promptStore)
         }
         .defaultSize(width: 760, height: 640)
         .windowResizability(.contentMinSize)

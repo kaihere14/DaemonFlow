@@ -39,6 +39,16 @@ enum CleanupModelCatalog {
             recommended: true
         ),
         CleanupModel(
+            id: "qwen-2.5-1.5b",
+            displayName: "Qwen 2.5 1.5B",
+            tagline: "Lighter Qwen — quicker, and easier on memory.",
+            hubRepoID: "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+            sizeDescription: "870 MB",
+            speedDescription: "Very fast",
+            qualityDescription: "Good, multilingual",
+            recommended: false
+        ),
+        CleanupModel(
             id: "qwen-2.5-3b",
             displayName: "Qwen 2.5 3B",
             tagline: "Solid alternative with strong multilingual support.",

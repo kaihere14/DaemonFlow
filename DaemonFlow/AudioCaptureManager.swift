@@ -111,6 +111,13 @@ final class AudioCaptureManager: ObservableObject {
         accumulator.latestLevel()
     }
 
+    /// Copies everything captured so far *without* clearing the buffer, so
+    /// the live preview can transcribe mid-utterance and the eventual
+    /// stopRecording() still returns the complete recording.
+    func snapshotSamples() -> [Float] {
+        accumulator.snapshot()
+    }
+
     /// Stops capture and returns everything accumulated since startRecording,
     /// clearing the internal buffer for the next utterance.
     func stopRecording() -> [Float] {
@@ -205,6 +212,12 @@ private final class SampleAccumulator: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return level
+    }
+
+    func snapshot() -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples
     }
 
     func drain() -> [Float] {

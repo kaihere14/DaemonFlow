@@ -13,9 +13,13 @@ final class AppState: ObservableObject {
     let modelDownloadManager: ModelDownloadManager
     let audioCaptureManager: AudioCaptureManager
     let cleanupModelManager: CleanupModelManager
+    let vocabularyStore = VocabularyStore()
+    let hudSettings = HUDSettingsStore()
+    let promptStore = PromptStore()
     let hudModel = HUDModel()
 
     private let transcriber = WhisperTranscriber()
+    private let parakeetTranscriber = ParakeetTranscriber()
     private let cleanupEngine: LLMCleanupEngine
     private let textInjector = TextInjector()
     private let selectionRefiner = SelectionRefiner()
@@ -34,14 +38,18 @@ final class AppState: ObservableObject {
     /// actually record or inject anything.
     @Published private(set) var hasRequiredPermissions: Bool
 
-    /// Drives root view routing: true once both a Whisper model and a
-    /// cleanup model have been selected (two-step onboarding complete).
+    /// Drives root view routing: true once both a transcription model
+    /// (Whisper or Parakeet) and a cleanup model have been selected
+    /// (two-step onboarding complete).
     @Published private(set) var hasCompletedOnboarding: Bool
 
     /// Sheet triggers for the standalone model pickers and cleanup lab.
     @Published var isPresentingModelPicker = false
     @Published var isPresentingCleanupPicker = false
     @Published var isPresentingCleanupLab = false
+    @Published var isPresentingVocabulary = false
+    @Published var isPresentingHUDAppearance = false
+    @Published var isPresentingPrompts = false
 
     /// ⌥1 refine lifecycle: drives the HUD's live meter while the user
     /// dictates an instruction, the shimmering "Refining" label while the
@@ -57,6 +65,12 @@ final class AppState: ObservableObject {
     @Published private(set) var isTranscribing = false
     @Published private(set) var refinePhase: RefinePhase = .idle
     @Published private(set) var lastTranscript = ""
+
+    /// Raw, uncleaned transcription of the dictation currently in
+    /// progress, refreshed every livePreviewInterval while Fn is held.
+    /// Feedback only — the pipeline still transcribes the complete
+    /// recording (and cleans it) on release.
+    @Published private(set) var liveTranscript = ""
     @Published private(set) var transcriptHistory: [TranscriptEntry] = []
     @Published private(set) var transcriptionError: String?
 
@@ -69,6 +83,24 @@ final class AppState: ObservableObject {
     /// non-zero, so a hold the user aborted without speaking degrades to a
     /// plain refine rather than feeding noise to the model.
     private static let minimumInstructionSampleCount = 4000
+
+    /// How often the live preview re-transcribes what has been captured so
+    /// far. Each pass re-runs the model over the whole buffer, so this is
+    /// a floor rather than a fixed cadence: a pass that takes longer than
+    /// the interval simply pushes the next one out.
+    private static let livePreviewInterval = Duration.milliseconds(700)
+
+    /// Under ~0.75s there isn't enough speech for a preview worth showing,
+    /// and short buffers are exactly where Whisper invents filler.
+    private static let minimumLivePreviewSampleCount = 12000
+
+    /// The HUD shows at most two lines; keeping the tail well under that
+    /// avoids relying on truncation for the common case.
+    private static let livePreviewCharacterLimit = 90
+
+    /// Cancelled the moment Fn is released, so a partial that lands after
+    /// the fact can't overwrite the HUD on its way out.
+    private var livePreviewTask: Task<Void, Never>?
 
     private let logger = Logger(subsystem: daemonFlowLogSubsystem, category: "pipeline")
 
@@ -90,8 +122,13 @@ final class AppState: ObservableObject {
         self.transcriptHistory = transcriptStore.load()
         self.lastTranscript = transcriptHistory.first?.text ?? ""
 
-        Publishers.CombineLatest(modelDownloadManager.$selectedFileName, cleanupModelManager.$selectedHubRepoID)
-            .sink { [weak self] _, _ in
+        Publishers.CombineLatest4(
+            modelDownloadManager.$selectedFileName,
+            modelDownloadManager.$selectedEngine,
+            modelDownloadManager.$isParakeetDownloaded,
+            cleanupModelManager.$selectedHubRepoID
+        )
+            .sink { [weak self] _, _, _, _ in
                 guard let self else { return }
                 self.hasCompletedOnboarding = Self.computeOnboardingComplete(modelDownloadManager, cleanupModelManager)
             }
@@ -114,7 +151,9 @@ final class AppState: ObservableObject {
             .sink { [weak self] isRecording in
                 if isRecording {
                     self?.audioCaptureManager.startRecording()
+                    self?.startLivePreview()
                 } else {
+                    self?.stopLivePreview()
                     self?.finishRecordingAndTranscribe()
                 }
             }
@@ -142,15 +181,20 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
-        Publishers.CombineLatest3(hotkeyManager.$isRecording, $isTranscribing, $refinePhase)
-            .map { isRecording, isTranscribing, refinePhase -> HUDState in
+        Publishers.CombineLatest4(
+            hotkeyManager.$isRecording,
+            $isTranscribing,
+            $refinePhase,
+            hudSettings.$alwaysVisible
+        )
+            .map { isRecording, isTranscribing, refinePhase, alwaysShowHUD -> HUDState in
                 if isRecording { return .recording }
                 if isTranscribing { return .processing }
                 switch refinePhase {
                 case .listening: return .instructing
                 case .refining: return .refining
                 case .done: return .done
-                case .idle: return .hidden
+                case .idle: return alwaysShowHUD ? .idle : .hidden
                 }
             }
             .removeDuplicates()
@@ -159,6 +203,79 @@ final class AppState: ObservableObject {
                 hudModel.state = state
             }
             .store(in: &cancellables)
+
+        $liveTranscript
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [hudModel] text in
+                hudModel.liveText = text
+            }
+            .store(in: &cancellables)
+
+        // The pill lives in an NSPanel, outside the SwiftUI environment
+        // the settings sheet edits — so its sizes are pushed to it here.
+        hudSettings.$appearance
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [hudModel] appearance in
+                hudModel.appearance = appearance
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Re-transcribes the in-progress recording on a loop so the HUD can
+    /// show what is being heard while the user is still talking. Runs the
+    /// same engine the final pass will use — no cleanup, no history, no
+    /// injection.
+    private func startLivePreview() {
+        livePreviewTask?.cancel()
+        liveTranscript = ""
+
+        guard let route = currentTranscriptionRoute() else { return }
+
+        livePreviewTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.livePreviewInterval)
+                guard !Task.isCancelled, let self else { return }
+
+                let samples = self.audioCaptureManager.snapshotSamples()
+                guard samples.count >= Self.minimumLivePreviewSampleCount else { continue }
+
+                // Shares the transcriber actor with the final pass, so at
+                // most one preview can ever be in flight — and the final
+                // transcription queues behind at most that one.
+                guard let text = try? await self.transcribe(samples, using: route) else { continue }
+                guard !Task.isCancelled else { return }
+
+                let corrected = VocabularyCorrector.apply(text, terms: self.vocabularyStore.termStrings)
+                self.liveTranscript = Self.livePreviewText(from: corrected)
+            }
+        }
+    }
+
+    private func stopLivePreview() {
+        livePreviewTask?.cancel()
+        livePreviewTask = nil
+        liveTranscript = ""
+    }
+
+    /// Strips the bracketed annotations Whisper emits for non-speech
+    /// (`[BLANK_AUDIO]`, `(wind blowing)`) and keeps only the tail, which
+    /// is the part the user is actually saying right now.
+    private static func livePreviewText(from raw: String) -> String {
+        let withoutAnnotations = raw
+            .replacingOccurrences(of: "\\[[^\\]]*\\]", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\([^)]*\\)", with: " ", options: .regularExpression)
+        let collapsed = withoutAnnotations
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard collapsed.count > Self.livePreviewCharacterLimit else { return collapsed }
+
+        let tail = collapsed.suffix(Self.livePreviewCharacterLimit)
+        // Start at a word boundary so the preview never opens mid-word.
+        guard let spaceIndex = tail.firstIndex(of: " ") else { return "…" + tail }
+        return "…" + tail[tail.index(after: spaceIndex)...]
     }
 
     /// `.done` is only a two-second confirmation badge, not busy state — a
@@ -236,13 +353,14 @@ final class AppState: ObservableObject {
             logger.info("Instructed refine: only \(samples.count, privacy: .public) samples — falling back to plain refine")
             return nil
         }
-        guard let modelPath = modelDownloadManager.selectedModelPath() else {
-            logger.error("Instructed refine: no Whisper model selected — falling back to plain refine")
+        guard let route = currentTranscriptionRoute() else {
+            logger.error("Instructed refine: no transcription model selected — falling back to plain refine")
             return nil
         }
 
         do {
-            let instruction = try await transcriber.transcribe(samples: samples, modelPath: modelPath)
+            let raw = try await transcribe(samples, using: route)
+            let instruction = VocabularyCorrector.apply(raw, terms: vocabularyStore.termStrings)
             logger.info("Refine instruction: \(instruction, privacy: .public)")
             return instruction
         } catch {
@@ -278,6 +396,29 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Resolves the current engine selection into something the
+    /// transcription task can run with, or nil when nothing usable is
+    /// selected yet.
+    private func currentTranscriptionRoute() -> TranscriptionRoute? {
+        switch modelDownloadManager.selectedEngine {
+        case .whisper:
+            guard let modelPath = modelDownloadManager.selectedModelPath() else { return nil }
+            return .whisper(modelPath: modelPath)
+        case .parakeet:
+            guard modelDownloadManager.isParakeetDownloaded else { return nil }
+            return .parakeet
+        }
+    }
+
+    private func transcribe(_ samples: [Float], using route: TranscriptionRoute) async throws -> String {
+        switch route {
+        case .whisper(let modelPath):
+            return try await transcriber.transcribe(samples: samples, modelPath: modelPath)
+        case .parakeet:
+            return try await parakeetTranscriber.transcribe(samples: samples)
+        }
+    }
+
     private func finishRecordingAndTranscribe() {
         let samples = audioCaptureManager.stopRecording()
         guard samples.count >= Self.minimumSampleCount else {
@@ -285,35 +426,52 @@ final class AppState: ObservableObject {
             return
         }
 
-        guard let modelPath = modelDownloadManager.selectedModelPath() else {
-            logger.error("No Whisper model selected")
-            transcriptionError = "No Whisper model selected. Pick one in Settings."
+        guard let route = currentTranscriptionRoute() else {
+            logger.error("No transcription model selected")
+            transcriptionError = "No transcription model selected. Pick one in Settings."
             return
         }
 
         isTranscribing = true
         transcriptionError = nil
 
-        logger.info("Transcribing \(samples.count, privacy: .public) samples with \(modelPath.lastPathComponent, privacy: .public)")
+        logger.info("Transcribing \(samples.count, privacy: .public) samples with \(route.logDescription, privacy: .public)")
 
         let cleanupRepoID = cleanupModelManager.selectedHubRepoID
+        // Snapshotted here rather than read inside the task: the pipeline
+        // runs off the main actor, and an edit made mid-dictation
+        // shouldn't change the rules halfway through.
+        let vocabulary = vocabularyStore.termStrings
         // Stamped now, not when the model finishes: transcription time
         // varies with utterance length, so two dictations in quick
         // succession can complete out of order. This is the timestamp the
         // history is sorted by.
         let recordedAt = Date()
 
-        Task { [weak self, transcriber, cleanupEngine, logger] in
+        Task { [weak self, transcriber, parakeetTranscriber, cleanupEngine, logger] in
             do {
                 // Hops to the transcriber actor's executor — the blocking
-                // whisper_full call runs there, not on the main actor.
-                let rawText = try await transcriber.transcribe(samples: samples, modelPath: modelPath)
+                // inference call runs there, not on the main actor.
+                let rawText: String
+                switch route {
+                case .whisper(let modelPath):
+                    rawText = try await transcriber.transcribe(samples: samples, modelPath: modelPath)
+                case .parakeet:
+                    rawText = try await parakeetTranscriber.transcribe(samples: samples)
+                }
                 logger.info("Transcription finished — \(rawText.count, privacy: .public) chars")
 
-                var finalText = rawText
-                if !rawText.isEmpty, let cleanupRepoID {
+                // Fix custom spellings before cleanup, so the LLM reads
+                // the proper nouns as the user spells them rather than
+                // "correcting" a mangled version into something else.
+                var finalText = VocabularyCorrector.apply(rawText, terms: vocabulary)
+                if !finalText.isEmpty, let cleanupRepoID {
                     do {
-                        finalText = try await cleanupEngine.cleanup(rawText, hubRepoID: cleanupRepoID)
+                        let cleaned = try await cleanupEngine.cleanup(finalText, hubRepoID: cleanupRepoID)
+                        // Applied again on the way out: the cleanup model
+                        // is free to rewrite anything, including a term it
+                        // has never seen.
+                        finalText = VocabularyCorrector.apply(cleaned, terms: vocabulary)
                         logger.info("Cleanup finished — \(finalText.count, privacy: .public) chars")
                     } catch {
                         // Cleanup is best-effort: fall back to the raw
@@ -393,11 +551,10 @@ final class AppState: ObservableObject {
     }
 
     private static func computeOnboardingComplete(
-        _ whisper: ModelDownloadManager,
+        _ transcription: ModelDownloadManager,
         _ cleanup: CleanupModelManager
     ) -> Bool {
-        let whisperReady = whisper.selectedModelPath() != nil || whisper.hasAnyDownloadedModel()
-        return whisperReady && cleanup.selectedHubRepoID != nil
+        transcription.hasUsableTranscriptionModel && cleanup.selectedHubRepoID != nil
     }
 
     private static func computePermissionsGranted(

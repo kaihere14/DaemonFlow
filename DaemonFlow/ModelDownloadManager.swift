@@ -9,11 +9,23 @@ import Combine
 @MainActor
 final class ModelDownloadManager: ObservableObject {
     private static let selectedModelDefaultsKey = "selectedWhisperModel"
+    private static let selectedEngineDefaultsKey = "selectedTranscriptionEngine"
 
-    /// Source of truth for the current selection. @Published so any view
+    /// Which backend transcribes dictation. Persisted separately from the
+    /// Whisper file name so switching to Parakeet and back doesn't lose
+    /// which Whisper model was picked. Defaults to Whisper, which is what
+    /// every install before Parakeet existed was already using.
+    @Published private(set) var selectedEngine: TranscriptionEngine
+
+    /// Source of truth for the current Whisper selection. @Published so any view
     /// reading `isSelected(_:)` re-renders when the selection changes,
     /// whether from a fresh download or from picking an already-downloaded model.
     @Published private(set) var selectedFileName: String?
+
+    /// Cached disk check for the Parakeet bundle. Published because
+    /// `AsrModels.modelsExist` walks the file system — views ask for it on
+    /// every render, and it has to invalidate when a download finishes.
+    @Published private(set) var isParakeetDownloaded: Bool
 
     @Published private(set) var progressByModelID: [String: Double] = [:]
     @Published private(set) var downloadingModelIDs: Set<String> = []
@@ -30,6 +42,9 @@ final class ModelDownloadManager: ObservableObject {
 
     init() {
         selectedFileName = UserDefaults.standard.string(forKey: Self.selectedModelDefaultsKey)
+        selectedEngine = UserDefaults.standard.string(forKey: Self.selectedEngineDefaultsKey)
+            .flatMap(TranscriptionEngine.init(rawValue:)) ?? .whisper
+        isParakeetDownloaded = ParakeetModelStorage.isDownloaded
     }
 
     // MARK: - Paths & selection state
@@ -53,13 +68,83 @@ final class ModelDownloadManager: ObservableObject {
     }
 
     func isSelected(_ model: WhisperModel) -> Bool {
-        selectedFileName == model.fileName
+        selectedEngine == .whisper && selectedFileName == model.fileName
     }
 
     /// Update the persisted selection without downloading anything.
     func selectModel(_ model: WhisperModel) {
         UserDefaults.standard.set(model.fileName, forKey: Self.selectedModelDefaultsKey)
         selectedFileName = model.fileName
+        selectEngine(.whisper)
+    }
+
+    /// True once the current engine has a model the pipeline can actually
+    /// run with — the gate onboarding completion is measured against.
+    var hasUsableTranscriptionModel: Bool {
+        switch selectedEngine {
+        case .whisper:
+            return selectedModelPath() != nil || hasAnyDownloadedModel()
+        case .parakeet:
+            return isParakeetDownloaded
+        }
+    }
+
+    /// Label for the selected transcription model, as shown in Settings.
+    var selectedModelDisplayName: String? {
+        switch selectedEngine {
+        case .whisper:
+            return selectedFileName
+        case .parakeet:
+            return ParakeetModelCatalog.defaultModel.displayName
+        }
+    }
+
+    // MARK: - Parakeet
+
+    func isModelDownloaded(_ model: ParakeetModel) -> Bool {
+        isParakeetDownloaded
+    }
+
+    func isSelected(_ model: ParakeetModel) -> Bool {
+        selectedEngine == .parakeet
+    }
+
+    func selectModel(_ model: ParakeetModel) {
+        selectEngine(.parakeet)
+    }
+
+    /// Downloads the Parakeet CoreML bundle, then selects it — the same
+    /// download-and-select contract the Whisper cards have. Loading into
+    /// memory stays lazy until the first dictation.
+    func downloadModel(_ model: ParakeetModel) {
+        guard !downloadingModelIDs.contains(model.id) else { return }
+
+        errorByModelID[model.id] = nil
+        progressByModelID[model.id] = 0
+        downloadingModelIDs.insert(model.id)
+
+        Task { [weak self] in
+            do {
+                try await ParakeetModelStorage.download { fraction in
+                    Task { @MainActor [weak self] in
+                        self?.progressByModelID[model.id] = fraction
+                    }
+                }
+                guard let self else { return }
+                self.downloadingModelIDs.remove(model.id)
+                self.isParakeetDownloaded = ParakeetModelStorage.isDownloaded
+                self.selectModel(model)
+            } catch {
+                guard let self else { return }
+                self.downloadingModelIDs.remove(model.id)
+                self.errorByModelID[model.id] = error.localizedDescription
+            }
+        }
+    }
+
+    private func selectEngine(_ engine: TranscriptionEngine) {
+        UserDefaults.standard.set(engine.rawValue, forKey: Self.selectedEngineDefaultsKey)
+        selectedEngine = engine
     }
 
     // MARK: - Downloading
