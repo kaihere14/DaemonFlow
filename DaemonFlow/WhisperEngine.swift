@@ -61,7 +61,11 @@ nonisolated final class WhisperEngine {
     }
 
     /// Transcribes 16kHz mono Float32 PCM samples and returns the full text.
-    func transcribe(samples: [Float]) throws -> String {
+    ///
+    /// `prompt` is fed to the decoder as if it were preceding speech, which
+    /// biases it toward the spellings it contains — the documented way to
+    /// teach Whisper names and jargon it would otherwise mishear.
+    func transcribe(samples: [Float], prompt: String? = nil) throws -> String {
         guard let context else {
             throw WhisperEngineError.noModelLoaded
         }
@@ -76,8 +80,16 @@ nonisolated final class WhisperEngine {
         params.language = Self.englishLanguage
         params.n_threads = Int32(min(8, max(1, ProcessInfo.processInfo.activeProcessorCount - 2)))
 
-        let result = samples.withUnsafeBufferPointer { buffer in
-            whisper_full(context, params, buffer.baseAddress, Int32(buffer.count))
+        let result: Int32
+        if let prompt, !prompt.isEmpty {
+            // Only borrowed for the duration of whisper_full.
+            result = prompt.withCString { promptPointer in
+                var promptedParams = params
+                promptedParams.initial_prompt = promptPointer
+                return Self.run(context, promptedParams, samples)
+            }
+        } else {
+            result = Self.run(context, params, samples)
         }
         guard result == 0 else {
             throw WhisperEngineError.transcriptionFailed(code: result)
@@ -91,5 +103,11 @@ nonisolated final class WhisperEngine {
             }
         }
         return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func run(_ context: OpaquePointer, _ params: whisper_full_params, _ samples: [Float]) -> Int32 {
+        samples.withUnsafeBufferPointer { buffer in
+            whisper_full(context, params, buffer.baseAddress, Int32(buffer.count))
+        }
     }
 }

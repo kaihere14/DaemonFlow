@@ -2,462 +2,279 @@
 //  OnboardingView.swift
 //  DaemonFlow
 //
+//  First-run setup, in three short screens sharing one layout: permissions,
+//  then a transcription model, then a cleanup model. Each screen stages in
+//  once (icon, heading, content) — the only place in the app with an
+//  expressive entrance, because it's seen once.
+//
 
+import AVFoundation
+import AppKit
 import SwiftUI
 
-enum OnboardingMode {
-    /// First launch: step 1 (Whisper) then step 2 (cleanup LLM).
-    case fullFlow
-    /// "Change Model" sheet — Whisper grid only.
-    case whisperOnly
-    /// "Change Cleanup Model" sheet — cleanup grid only.
-    case cleanupOnly
+// MARK: - Shared layout
+
+struct OnboardingScaffold<Content: View, Footer: View>: View {
+    /// Zero-based position in the three-screen flow.
+    let step: Int
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: Content
+    @ViewBuilder let footer: Footer
+
+    static var stepCount: Int { 3 }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 64, height: 64)
+                    .accessibilityHidden(true)
+                    .staggeredEntrance(0)
+                    .padding(.bottom, 14)
+
+                VStack(spacing: 6) {
+                    Text(title)
+                        .font(.title2.weight(.semibold))
+                    Text(subtitle)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 440)
+                }
+                .staggeredEntrance(1)
+                // A new identity per step replays the heading's entrance
+                // when the flow advances, without replaying the icon's.
+                .id(step)
+            }
+            .padding(.top, 28)
+            .padding(.horizontal, 32)
+
+            content
+                .frame(maxWidth: 600)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .staggeredEntrance(2)
+                .id(step)
+
+            Divider()
+
+            HStack(spacing: 12) {
+                StepIndicator(current: step, count: Self.stepCount)
+                Spacer()
+                footer
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+        }
+        .toolbar(removing: .title)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    }
 }
+
+/// Dots, with the current one stretched into a short bar. The stretch is
+/// the only thing that moves when the flow advances.
+private struct StepIndicator: View {
+    let current: Int
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<count, id: \.self) { index in
+                Capsule()
+                    .fill(index == current ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
+                    .frame(width: index == current ? 16 : 6, height: 6)
+            }
+        }
+        .animation(Motion.standard, value: current)
+        .accessibilityElement()
+        .accessibilityLabel("Step \(current + 1) of \(count)")
+    }
+}
+
+// MARK: - Step 1: permissions
+
+/// Shows all three permissions at once so it's clear how much is left.
+/// There's no Continue button: AppState watches all three and the window
+/// moves on by itself the moment the last one lands.
+struct PermissionsOnboardingView: View {
+    @EnvironmentObject private var hotkeyManager: HotkeyManager
+    @EnvironmentObject private var audioCaptureManager: AudioCaptureManager
+
+    var body: some View {
+        OnboardingScaffold(
+            step: 0,
+            title: "Welcome to DaemonFlow",
+            subtitle: "Hold fn, speak, and let go — your words appear wherever you're typing. First, DaemonFlow needs three permissions."
+        ) {
+            Form {
+                Section {
+                    PermissionRow(
+                        systemImage: "accessibility",
+                        tint: .blue,
+                        title: "Accessibility",
+                        detail: "Pastes your text into the app you're using.",
+                        isGranted: !hotkeyManager.needsAccessibilityPermission,
+                        isNext: nextStep == 0,
+                        actionTitle: "Open Settings",
+                        action: hotkeyManager.openAccessibilitySettings
+                    )
+                    PermissionRow(
+                        systemImage: "keyboard",
+                        tint: .gray,
+                        title: "Input Monitoring",
+                        detail: "Notices the fn key in every app, not just this one.",
+                        isGranted: !hotkeyManager.needsInputMonitoringPermission,
+                        isNext: nextStep == 1,
+                        actionTitle: "Open Settings",
+                        action: hotkeyManager.openInputMonitoringSettings
+                    )
+                    PermissionRow(
+                        systemImage: "mic.fill",
+                        tint: .orange,
+                        title: "Microphone",
+                        detail: "Hears you while fn is held.",
+                        isGranted: audioCaptureManager.micPermissionGranted,
+                        isNext: nextStep == 2,
+                        actionTitle: micNeedsPrompt ? "Allow" : "Open Settings",
+                        action: requestMicrophone
+                    )
+                } footer: {
+                    Text("Everything runs on this Mac. Audio and text never leave it.")
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+        } footer: {
+            Text("Continues on its own once all three are on.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button("Check Again") {
+                hotkeyManager.retryEventTap()
+                audioCaptureManager.recheckMicPermission()
+            }
+        }
+    }
+
+    /// The first permission still off — the one whose button is
+    /// prominent, so there's always exactly one obvious next click.
+    private var nextStep: Int? {
+        if hotkeyManager.needsAccessibilityPermission { return 0 }
+        if hotkeyManager.needsInputMonitoringPermission { return 1 }
+        if !audioCaptureManager.micPermissionGranted { return 2 }
+        return nil
+    }
+
+    private var micNeedsPrompt: Bool {
+        audioCaptureManager.micAuthorizationStatus == .notDetermined
+    }
+
+    /// The microphone can be asked for in place the first time. After a
+    /// refusal macOS won't ask again, so it's System Settings from then on.
+    private func requestMicrophone() {
+        if micNeedsPrompt {
+            audioCaptureManager.requestMicPermission()
+        } else {
+            audioCaptureManager.openMicrophoneSettings()
+        }
+    }
+}
+
+private struct PermissionRow: View {
+    let systemImage: String
+    let tint: Color
+    let title: String
+    let detail: String
+    let isGranted: Bool
+    let isNext: Bool
+    let actionTitle: String
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 12) {
+            SettingsGlyph(systemImage: systemImage, tint: tint)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .fontWeight(.medium)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 16)
+
+            ZStack(alignment: .trailing) {
+                if isGranted {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 17))
+                        .foregroundStyle(.green)
+                        .accessibilityLabel("Allowed")
+                        .transition(IconSwapTransition(reduceMotion: reduceMotion))
+                } else if isNext {
+                    Button(actionTitle, action: action)
+                        .buttonStyle(.borderedProminent)
+                        .transition(ControlSwapTransition(reduceMotion: reduceMotion))
+                } else {
+                    Button(actionTitle, action: action)
+                        .transition(ControlSwapTransition(reduceMotion: reduceMotion))
+                }
+            }
+            .animation(Motion.iconSwap, value: isGranted)
+            .animation(Motion.iconSwap, value: isNext)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Steps 2 and 3: models
 
 struct OnboardingView: View {
-    let mode: OnboardingMode
-    var onClose: (() -> Void)?
-
-    @State private var step: Int
-
     @EnvironmentObject private var downloadManager: ModelDownloadManager
     @EnvironmentObject private var cleanupManager: CleanupModelManager
 
-    init(mode: OnboardingMode = .fullFlow, onClose: (() -> Void)? = nil) {
-        self.mode = mode
-        self.onClose = onClose
-        _step = State(initialValue: mode == .cleanupOnly ? 2 : 1)
+    private enum Step {
+        case transcription, cleanup
     }
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 20),
-        GridItem(.flexible(), spacing: 20),
-    ]
+    @State private var step: Step = .transcription
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                header
-
-                LazyVGrid(columns: columns, spacing: 20) {
-                    if step == 1 {
-                        ForEach(WhisperModelCatalog.all) { model in
-                            WhisperModelCard(model: model)
-                        }
-                        ForEach(ParakeetModelCatalog.all) { model in
-                            ParakeetModelCard(model: model)
-                        }
-                    } else {
-                        ForEach(CleanupModelCatalog.all) { model in
-                            CleanupModelCard(model: model)
-                        }
+        OnboardingScaffold(
+            step: step == .transcription ? 1 : 2,
+            title: step == .transcription ? "Choose a speech model" : "Choose a cleanup model",
+            subtitle: step == .transcription
+                ? "This turns your voice into text, on this Mac. The recommended one suits most people — you can change it any time."
+                : "This tidies the raw transcript — filler words out, corrections applied, punctuation in — before it's pasted."
+        ) {
+            Form {
+                Section {
+                    switch step {
+                    case .transcription: TranscriptionModelList()
+                    case .cleanup: CleanupModelList()
                     }
                 }
-
-                if mode == .fullFlow && step == 1 {
-                    continueBar
-                }
             }
-            .frame(maxWidth: 760)
-            .padding(32)
-            .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .background(Theme.background)
-    }
-
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                if mode == .fullFlow {
-                    Text("STEP \(step) OF 2")
-                        .font(Theme.Font.monoLabel)
-                        .tracking(1.2)
-                        .foregroundStyle(Theme.textSecondary.opacity(0.7))
-                }
-
-                Text(step == 1 ? "Choose your model" : "Choose your cleanup model")
-                    .font(Theme.Font.headerTitle)
-                    .foregroundStyle(Theme.textPrimary)
-
-                Text(step == 1
-                     ? "Transcribes your speech locally — Whisper or Parakeet. You can change this anytime from Settings."
-                     : "Polishes raw transcripts — removes fillers, applies self-corrections. Change anytime from Settings.")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.textSecondary)
-            }
-
-            Spacer()
-
-            if let onClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 26, height: 26)
-                        .background(Theme.cardSurface, in: Circle())
-                        .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+        } footer: {
+            switch step {
+            case .transcription:
+                Button("Continue") { step = .cleanup }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!downloadManager.hasUsableTranscriptionModel)
+            case .cleanup:
+                // Picking a cleanup model completes setup, and the window
+                // switches over to settings by itself.
+                Text("Setup finishes once a model is ready.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Back") { step = .transcription }
             }
         }
-    }
-
-    private var continueBar: some View {
-        HStack {
-            Spacer()
-            Button {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    step = 2
-                }
-            } label: {
-                Text("Continue")
-                    .font(Theme.Font.body.weight(.medium))
-                    .foregroundStyle(transcriptionModelSelected ? Theme.textPrimary : Theme.textSecondary)
-                    .padding(.horizontal, 22)
-                    .frame(height: 34)
-            }
-            .buttonStyle(.plain)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(transcriptionModelSelected ? Theme.accent.opacity(0.16) : .clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(transcriptionModelSelected ? Theme.accent : Theme.cardBorder, lineWidth: 1)
-            )
-            .disabled(!transcriptionModelSelected)
-        }
-    }
-
-    private var transcriptionModelSelected: Bool {
-        downloadManager.hasUsableTranscriptionModel
-    }
-}
-
-// MARK: - Catalog-specific wrappers
-
-private struct WhisperModelCard: View {
-    let model: WhisperModel
-    @EnvironmentObject private var downloadManager: ModelDownloadManager
-
-    var body: some View {
-        ModelSelectionCard(
-            title: model.displayName,
-            tagline: model.tagline,
-            stats: [
-                ModelStat(label: "SIZE", value: model.sizeDescription),
-                ModelStat(label: "SPEED", value: model.speedDescription),
-                ModelStat(label: "ACCURACY", value: model.accuracyDescription),
-            ],
-            recommended: model.recommended,
-            status: status,
-            errorText: downloadManager.errorByModelID[model.id],
-            downloadAction: { downloadManager.downloadModel(model) },
-            selectAction: { downloadManager.selectModel(model) }
-        )
-    }
-
-    private var status: ModelCardStatus {
-        if downloadManager.isSelected(model) { return .selected }
-        if downloadManager.downloadingModelIDs.contains(model.id) {
-            return .downloading(progress: downloadManager.progressByModelID[model.id] ?? 0)
-        }
-        if downloadManager.isModelDownloaded(model) { return .downloaded }
-        return .notDownloaded
-    }
-}
-
-private struct ParakeetModelCard: View {
-    let model: ParakeetModel
-    @EnvironmentObject private var downloadManager: ModelDownloadManager
-
-    var body: some View {
-        ModelSelectionCard(
-            title: model.displayName,
-            tagline: model.tagline,
-            stats: [
-                ModelStat(label: "SIZE", value: model.sizeDescription),
-                ModelStat(label: "SPEED", value: model.speedDescription),
-                ModelStat(label: "ACCURACY", value: model.accuracyDescription),
-            ],
-            recommended: model.recommended,
-            status: status,
-            errorText: downloadManager.errorByModelID[model.id],
-            downloadAction: { downloadManager.downloadModel(model) },
-            selectAction: { downloadManager.selectModel(model) }
-        )
-    }
-
-    private var status: ModelCardStatus {
-        if downloadManager.isSelected(model) { return .selected }
-        if downloadManager.downloadingModelIDs.contains(model.id) {
-            return .downloading(progress: downloadManager.progressByModelID[model.id] ?? 0)
-        }
-        if downloadManager.isModelDownloaded(model) { return .downloaded }
-        return .notDownloaded
-    }
-}
-
-private struct CleanupModelCard: View {
-    let model: CleanupModel
-    @EnvironmentObject private var cleanupManager: CleanupModelManager
-
-    var body: some View {
-        ModelSelectionCard(
-            title: model.displayName,
-            tagline: model.tagline,
-            stats: [
-                ModelStat(label: "SIZE", value: model.sizeDescription),
-                ModelStat(label: "SPEED", value: model.speedDescription),
-                ModelStat(label: "QUALITY", value: model.qualityDescription),
-            ],
-            recommended: model.recommended,
-            status: status,
-            errorText: cleanupManager.errorByModelID[model.id],
-            downloadAction: { cleanupManager.downloadAndSelect(model) },
-            selectAction: { cleanupManager.selectModel(model) }
-        )
-    }
-
-    private var status: ModelCardStatus {
-        if cleanupManager.isSelected(model) { return .selected }
-        if cleanupManager.downloadingModelIDs.contains(model.id) {
-            return .downloading(progress: cleanupManager.progressByModelID[model.id] ?? 0)
-        }
-        if cleanupManager.isModelDownloaded(model) { return .downloaded }
-        return .notDownloaded
-    }
-}
-
-// MARK: - Generic model card
-
-struct ModelStat: Identifiable {
-    var id: String { label }
-    let label: String
-    let value: String
-}
-
-enum ModelCardStatus: Equatable {
-    case notDownloaded
-    case downloading(progress: Double)
-    case downloaded
-    case selected
-}
-
-struct ModelSelectionCard: View {
-    let title: String
-    let tagline: String
-    let stats: [ModelStat]
-    let recommended: Bool
-    let status: ModelCardStatus
-    let errorText: String?
-    let downloadAction: () -> Void
-    let selectAction: () -> Void
-
-    @State private var isHovering = false
-
-    private var isSelected: Bool { status == .selected }
-
-    private var borderColor: Color {
-        if isSelected { return Theme.accent }
-        if isHovering { return Theme.textSecondary.opacity(0.45) }
-        return Theme.cardBorder
-    }
-
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            if recommended {
-                RecommendedWaveform()
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 14)
-                    .allowsHitTesting(false)
-            }
-
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 8) {
-                    Text(title)
-                        .font(Theme.Font.cardTitle)
-                        .foregroundStyle(Theme.textPrimary)
-                    if recommended {
-                        RecommendedBadge()
-                    }
-                    Spacer()
-                }
-
-                Text(tagline)
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(stats) { stat in
-                        HStack(spacing: 10) {
-                            Text(stat.label)
-                                .font(Theme.Font.monoLabel)
-                                .foregroundStyle(Theme.textSecondary.opacity(0.7))
-                                .frame(width: 60, alignment: .leading)
-                            Text(stat.value)
-                                .font(Theme.Font.mono)
-                                .foregroundStyle(Theme.textPrimary.opacity(0.9))
-                            Spacer()
-                        }
-                    }
-                }
-
-                Spacer(minLength: 4)
-
-                actionArea
-
-                if let errorText {
-                    Text(errorText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.red.opacity(0.85))
-                        .lineLimit(2)
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, recommended ? 32 : 18)
-        }
-        .frame(maxWidth: .infinity, minHeight: 216, alignment: .top)
-        .background(Theme.cardSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(borderColor, lineWidth: isSelected ? 1.5 : 1)
-        )
-        .shadow(
-            color: (recommended && !isSelected) ? Theme.accent.opacity(0.22) : .clear,
-            radius: 24, x: 0, y: 10
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering in isHovering = hovering }
-        .animation(.easeOut(duration: 0.15), value: isHovering)
-        .animation(.easeOut(duration: 0.2), value: isSelected)
-    }
-
-    @ViewBuilder
-    private var actionArea: some View {
-        switch status {
-        case .selected:
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.successGreen)
-                Text("Selected")
-                    .font(Theme.Font.body.weight(.medium))
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-            }
-            .frame(height: 32)
-
-        case .downloading(let progress):
-            HStack(spacing: 8) {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Theme.cardBorder)
-                        Capsule()
-                            .fill(Theme.accent)
-                            .frame(width: max(3, geometry.size.width * CGFloat(progress)))
-                    }
-                }
-                .frame(height: 4)
-
-                Text("\(Int(progress * 100))%")
-                    .font(Theme.Font.mono)
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 32, alignment: .trailing)
-            }
-            .frame(height: 32)
-
-        case .downloaded:
-            Button(action: selectAction) {
-                Text("Select")
-                    .font(Theme.Font.body.weight(.medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 32)
-            }
-            .buttonStyle(.plain)
-            .background(Theme.cardSurfaceElevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-        case .notDownloaded:
-            Button(action: downloadAction) {
-                Text("Download & Select")
-                    .font(Theme.Font.body.weight(.medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 32)
-            }
-            .buttonStyle(DownloadButtonStyle())
-        }
-    }
-}
-
-/// Transparent by default, subtle accent fill on hover/press — matches
-/// the "no bounce, opacity/border transitions only" motion rule.
-private struct DownloadButtonStyle: ButtonStyle {
-    @State private var isHovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Theme.accent.opacity(configuration.isPressed ? 0.18 : (isHovering ? 0.1 : 0)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Theme.accent, lineWidth: 1)
-            )
-            .onHover { hovering in isHovering = hovering }
-            .animation(.easeOut(duration: 0.15), value: isHovering)
-    }
-}
-
-// MARK: - Recommended badge & waveform
-
-private struct RecommendedBadge: View {
-    @State private var pulse = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(Theme.accent)
-                .frame(width: 5, height: 5)
-                .opacity(pulse ? 1 : 0.35)
-                .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: pulse)
-            Text("RECOMMENDED")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.6)
-                .foregroundStyle(Theme.accent)
-        }
-        .onAppear { pulse = true }
-    }
-}
-
-/// The one deliberate motion moment on this screen: a thin, quiet
-/// waveform along the recommended card's bottom edge.
-private struct RecommendedWaveform: View {
-    @State private var animate = false
-
-    private let baseHeights: [CGFloat] = [5, 9, 13, 8, 11, 6]
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 4) {
-            ForEach(Array(baseHeights.enumerated()), id: \.offset) { index, base in
-                Capsule()
-                    .fill(Theme.accent.opacity(0.4))
-                    .frame(width: 3, height: animate ? base : base * 0.4)
-                    .animation(
-                        .easeInOut(duration: 0.9)
-                        .repeatForever(autoreverses: true)
-                        .delay(Double(index) * 0.12),
-                        value: animate
-                    )
-            }
-            Spacer()
-        }
-        .frame(height: 14)
-        .onAppear { animate = true }
     }
 }

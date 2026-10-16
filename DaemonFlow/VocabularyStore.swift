@@ -31,6 +31,16 @@ final class VocabularyStore: ObservableObject {
 
     @Published private(set) var terms: [VocabularyTerm] = []
 
+    /// Whether dictation also borrows spellings from the text visible in
+    /// the frontmost window (see ScreenContext). On by default: it only
+    /// reads through the Accessibility permission the app already holds,
+    /// and nothing it reads leaves the machine.
+    @Published var usesScreenContext: Bool {
+        didSet { UserDefaults.standard.set(usesScreenContext, forKey: Self.usesScreenContextKey) }
+    }
+
+    private static let usesScreenContextKey = "vocabulary.usesScreenContext"
+
     private let logger = Logger(subsystem: daemonFlowLogSubsystem, category: "vocabulary")
 
     private var fileURL: URL {
@@ -41,6 +51,7 @@ final class VocabularyStore: ObservableObject {
     }
 
     init() {
+        usesScreenContext = UserDefaults.standard.object(forKey: Self.usesScreenContextKey) as? Bool ?? true
         terms = load()
     }
 

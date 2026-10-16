@@ -2,76 +2,67 @@
 //  MenuBarView.swift
 //  DaemonFlow
 //
+//  A plain system menu. It's opened dozens of times a day, so it gets the
+//  instant, unanimated NSMenu every other status item uses rather than a
+//  custom popover.
+//
 
+import AppKit
 import SwiftUI
 
 struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var hotkeyManager: HotkeyManager
+    @EnvironmentObject private var audioCaptureManager: AudioCaptureManager
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .foregroundStyle(hotkeyManager.isRecording ? .red : Theme.textSecondary)
-                Text(hotkeyManager.isRecording ? "Recording" : "Idle")
-                    .foregroundStyle(Theme.textSecondary)
-                Spacer()
-                Circle()
-                    .fill(hotkeyManager.isRecording ? Color.red : Theme.textSecondary.opacity(0.4))
-                    .frame(width: 8, height: 8)
-            }
+        Text(statusTitle)
 
-            if hotkeyManager.isHandsFreeMode {
-                Text("Hands-free")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            if hotkeyManager.needsAccessibilityPermission {
-                Divider()
-
-                Text("Accessibility permission is required for the Fn hotkey to work.")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-
-                Button("Grant Accessibility Permission") {
-                    hotkeyManager.openAccessibilitySettings()
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.textPrimary)
-
-                Button("Retry") {
-                    hotkeyManager.retryEventTap()
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.textPrimary)
-            }
-
-            Divider()
-
-            Button("Open DaemonFlow") {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.textPrimary)
-
-            Divider()
-
-            Button("Quit") {
-                NSApp.terminate(nil)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.textPrimary)
+        if needsPermissions {
+            Button("Finish Setup…", action: openMainWindow)
         }
-        .padding(12)
-        .frame(width: 240)
-        .background(Theme.background)
-    }
-}
 
-#Preview {
-    MenuBarView()
-        .environmentObject(HotkeyManager())
+        Divider()
+
+        if let last = appState.transcriptHistory.first {
+            Button("Copy Last Transcript") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(last.text, forType: .string)
+            }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+
+            Divider()
+        }
+
+        Button("Open DaemonFlow…", action: openMainWindow)
+            .keyboardShortcut(",")
+
+        Divider()
+
+        Button("Quit DaemonFlow") {
+            NSApp.terminate(nil)
+        }
+        .keyboardShortcut("q")
+    }
+
+    private var needsPermissions: Bool {
+        hotkeyManager.needsAccessibilityPermission
+            || hotkeyManager.needsInputMonitoringPermission
+            || !audioCaptureManager.micPermissionGranted
+    }
+
+    private var statusTitle: String {
+        if needsPermissions { return "Permissions needed" }
+        if hotkeyManager.isRecording {
+            return hotkeyManager.isHandsFreeMode ? "Listening — hands-free" : "Listening…"
+        }
+        if appState.isTranscribing { return "Transcribing…" }
+        return "Ready — hold fn to dictate"
+    }
+
+    private func openMainWindow() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }

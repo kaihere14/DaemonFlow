@@ -32,6 +32,19 @@ final class AppState: ObservableObject {
     /// the user changes focus while speaking.
     private var pendingSelectionCapture: Task<String?, Never>?
 
+    /// Started the moment Fn goes down, so reading the screen overlaps
+    /// with the user talking instead of adding to the wait after release.
+    private var screenContextCapture: Task<[String], Never>?
+
+    /// The capture's result once it lands, for the live preview — which
+    /// polls rather than awaiting, so it never stalls on a slow app.
+    private var screenTerms: [String] = []
+
+    /// Combined dictionary + screen terms handed to the models. Kept well
+    /// under Whisper's ~224-token prompt window, which silently drops
+    /// whatever doesn't fit from the front.
+    private static let maxReferenceTerms = 60
+
     /// Drives root view routing: true once Accessibility (hotkey + paste
     /// injection) and Microphone are both granted. Gates everything below —
     /// there is no point offering model downloads before the app can
@@ -42,14 +55,6 @@ final class AppState: ObservableObject {
     /// (Whisper or Parakeet) and a cleanup model have been selected
     /// (two-step onboarding complete).
     @Published private(set) var hasCompletedOnboarding: Bool
-
-    /// Sheet triggers for the standalone model pickers and cleanup lab.
-    @Published var isPresentingModelPicker = false
-    @Published var isPresentingCleanupPicker = false
-    @Published var isPresentingCleanupLab = false
-    @Published var isPresentingVocabulary = false
-    @Published var isPresentingHUDAppearance = false
-    @Published var isPresentingPrompts = false
 
     /// ⌥1 refine lifecycle: drives the HUD's live meter while the user
     /// dictates an instruction, the shimmering "Refining" label while the
@@ -151,6 +156,7 @@ final class AppState: ObservableObject {
             .sink { [weak self] isRecording in
                 if isRecording {
                     self?.audioCaptureManager.startRecording()
+                    self?.beginScreenContextCapture()
                     self?.startLivePreview()
                 } else {
                     self?.stopLivePreview()
@@ -244,13 +250,53 @@ final class AppState: ObservableObject {
                 // Shares the transcriber actor with the final pass, so at
                 // most one preview can ever be in flight — and the final
                 // transcription queues behind at most that one.
-                guard let text = try? await self.transcribe(samples, using: route) else { continue }
+                let prompt = Self.whisperPrompt(
+                    for: Self.referenceTerms(vocabulary: self.vocabularyStore.termStrings, screen: self.screenTerms)
+                )
+                guard let text = try? await self.transcribe(samples, using: route, prompt: prompt) else { continue }
                 guard !Task.isCancelled else { return }
 
                 let corrected = VocabularyCorrector.apply(text, terms: self.vocabularyStore.termStrings)
                 self.liveTranscript = Self.livePreviewText(from: corrected)
             }
         }
+    }
+
+    /// Reads the frontmost window's text in the background and keeps the
+    /// distinctive terms for this dictation. A no-op when the user has
+    /// turned screen context off.
+    private func beginScreenContextCapture() {
+        screenContextCapture?.cancel()
+        screenTerms = []
+
+        guard vocabularyStore.usesScreenContext else {
+            screenContextCapture = nil
+            return
+        }
+
+        let known = vocabularyStore.termStrings
+        screenContextCapture = Task { [weak self] in
+            let terms = await ScreenContext.captureTerms(excluding: known)
+            self?.screenTerms = terms
+            return terms
+        }
+    }
+
+    /// Custom dictionary first — those are spellings the user asked for —
+    /// then whatever the screen contributed, de-duplicated.
+    nonisolated private static func referenceTerms(vocabulary: [String], screen: [String]) -> [String] {
+        var seen = Set<String>()
+        return (vocabulary + screen)
+            .filter { seen.insert($0.lowercased()).inserted }
+            .prefix(maxReferenceTerms)
+            .map { $0 }
+    }
+
+    /// A plain comma-separated list: Whisper treats the prompt as prior
+    /// speech, so this reads as "these words were just said" and nudges
+    /// the decoder toward their spellings.
+    nonisolated private static func whisperPrompt(for terms: [String]) -> String? {
+        terms.isEmpty ? nil : terms.joined(separator: ", ") + "."
     }
 
     private func stopLivePreview() {
@@ -410,10 +456,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func transcribe(_ samples: [Float], using route: TranscriptionRoute) async throws -> String {
+    /// `prompt` only reaches Whisper — Parakeet's decoder has no
+    /// equivalent, so for it the reference terms only help at cleanup.
+    private func transcribe(_ samples: [Float], using route: TranscriptionRoute, prompt: String? = nil) async throws -> String {
         switch route {
         case .whisper(let modelPath):
-            return try await transcriber.transcribe(samples: samples, modelPath: modelPath)
+            return try await transcriber.transcribe(samples: samples, modelPath: modelPath, prompt: prompt)
         case .parakeet:
             return try await parakeetTranscriber.transcribe(samples: samples)
         }
@@ -421,6 +469,8 @@ final class AppState: ObservableObject {
 
     private func finishRecordingAndTranscribe() {
         let samples = audioCaptureManager.stopRecording()
+        let screenCapture = screenContextCapture
+        screenContextCapture = nil
         guard samples.count >= Self.minimumSampleCount else {
             logger.info("Skipping transcription — only \(samples.count, privacy: .public) samples (accidental tap?)")
             return
@@ -449,13 +499,22 @@ final class AppState: ObservableObject {
         let recordedAt = Date()
 
         Task { [weak self, transcriber, parakeetTranscriber, cleanupEngine, logger] in
+            // Normally finished long before Fn is released — the read is
+            // bounded to half a second and started on key-down.
+            let screenTerms = await screenCapture?.value ?? []
+            let referenceTerms = Self.referenceTerms(vocabulary: vocabulary, screen: screenTerms)
+
             do {
                 // Hops to the transcriber actor's executor — the blocking
                 // inference call runs there, not on the main actor.
                 let rawText: String
                 switch route {
                 case .whisper(let modelPath):
-                    rawText = try await transcriber.transcribe(samples: samples, modelPath: modelPath)
+                    rawText = try await transcriber.transcribe(
+                        samples: samples,
+                        modelPath: modelPath,
+                        prompt: Self.whisperPrompt(for: referenceTerms)
+                    )
                 case .parakeet:
                     rawText = try await parakeetTranscriber.transcribe(samples: samples)
                 }
@@ -467,7 +526,11 @@ final class AppState: ObservableObject {
                 var finalText = VocabularyCorrector.apply(rawText, terms: vocabulary)
                 if !finalText.isEmpty, let cleanupRepoID {
                     do {
-                        let cleaned = try await cleanupEngine.cleanup(finalText, hubRepoID: cleanupRepoID)
+                        let cleaned = try await cleanupEngine.cleanup(
+                            finalText,
+                            referenceTerms: referenceTerms,
+                            hubRepoID: cleanupRepoID
+                        )
                         // Applied again on the way out: the cleanup model
                         // is free to rewrite anything, including a term it
                         // has never seen.
