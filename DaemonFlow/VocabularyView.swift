@@ -10,149 +10,57 @@
 import SwiftUI
 
 struct VocabularyView: View {
-    var onClose: (() -> Void)?
-
     @EnvironmentObject private var store: VocabularyStore
 
     @State private var newTerm = ""
     @FocusState private var addFieldFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            header
-            addRow
-            list
-        }
-        .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.background)
-        .onAppear { addFieldFocused = true }
-    }
+        Form {
+            Section {
+                HStack(spacing: 8) {
+                    TextField("New term", text: $newTerm, prompt: Text("Add a name or term…"))
+                        .labelsHidden()
+                        .focused($addFieldFocused)
+                        .onSubmit(commitNewTerm)
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Custom vocabulary")
-                    .font(Theme.Font.headerTitle)
-                    .foregroundStyle(Theme.textPrimary)
-                Text("Names and terms the speech model gets wrong. Anything it hears that's close to an entry is rewritten to the spelling you type here.")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer()
-
-            if let onClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 26, height: 26)
-                        .background(Theme.cardSurface, in: Circle())
-                        .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 1))
+                    Button("Add", action: commitNewTerm)
+                        .disabled(!canAdd)
                 }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var addRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                TextField("DaemonFlow, Whisper Flow, Anthropic…", text: $newTerm)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.textPrimary)
-                    .focused($addFieldFocused)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(Theme.cardSurfaceElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Theme.cardBorder, lineWidth: 1)
-                    )
-                    .onSubmit(commitNewTerm)
-
-                Button("Add", action: commitNewTerm)
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(canAdd ? Theme.accent : Theme.textSecondary.opacity(0.5))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(canAdd ? Theme.accent : Theme.cardBorder, lineWidth: 1)
-                    )
-                    .disabled(!canAdd)
+            } footer: {
+                // Worth stating up front — a user who adds "Wave" and sees
+                // nothing change would otherwise assume the feature is broken.
+                Text("Words the speech model gets wrong are rewritten to the spelling you add here. Terms of four letters or fewer only have their capitalization fixed.")
             }
 
-            // Worth stating up front — a user who adds "Wave" and sees
-            // nothing change would otherwise assume the feature is broken.
-            Text("Terms of four characters or fewer are only corrected for capitalization. Fuzzy matching that short would rewrite ordinary words.")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.textSecondary.opacity(0.8))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder
-    private var list: some View {
-        if store.terms.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("No terms yet")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                Text("Add the spellings you keep having to fix by hand.")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.cardSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.cardBorder, lineWidth: 1)
-            )
-        } else {
-            ScrollView {
-                VStack(spacing: 0) {
+            Section {
+                if store.terms.isEmpty {
+                    Text("Add the spellings you keep fixing by hand.")
+                        .foregroundStyle(.secondary)
+                } else {
                     ForEach(store.terms) { term in
-                        termRow(term)
-                        if term.id != store.terms.last?.id {
-                            Divider().overlay(Theme.cardBorder)
+                        HStack(spacing: 8) {
+                            EditableTermField(term: term) { store.update(term.id, to: $0) }
+                            IconButton(systemImage: "minus.circle", help: "Remove \(term.text)") {
+                                store.remove(term.id)
+                            }
                         }
                     }
                 }
+            } header: {
+                Text(termCountLabel)
             }
-            .background(Theme.cardSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Theme.cardBorder, lineWidth: 1)
-            )
         }
+        .formStyle(.grouped)
+        .onAppear { addFieldFocused = true }
     }
 
-    private func termRow(_ term: VocabularyTerm) -> some View {
-        HStack(spacing: 10) {
-            EditableTermField(term: term) { store.update(term.id, to: $0) }
-
-            Button {
-                store.remove(term.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .help("Remove")
+    private var termCountLabel: String {
+        switch store.terms.count {
+        case 0: "Terms"
+        case 1: "1 term"
+        default: "\(store.terms.count) terms"
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
     }
 
     private var canAdd: Bool {
@@ -188,10 +96,9 @@ private struct EditableTermField: View {
     }
 
     var body: some View {
-        TextField("", text: $draft)
+        TextField("Term", text: $draft)
             .textFieldStyle(.plain)
-            .font(Theme.Font.mono)
-            .foregroundStyle(Theme.textPrimary)
+            .labelsHidden()
             .focused($focused)
             .onSubmit { onCommit(draft) }
             .onChange(of: focused) { _, isFocused in

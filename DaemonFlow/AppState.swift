@@ -43,14 +43,6 @@ final class AppState: ObservableObject {
     /// (two-step onboarding complete).
     @Published private(set) var hasCompletedOnboarding: Bool
 
-    /// Sheet triggers for the standalone model pickers and cleanup lab.
-    @Published var isPresentingModelPicker = false
-    @Published var isPresentingCleanupPicker = false
-    @Published var isPresentingCleanupLab = false
-    @Published var isPresentingVocabulary = false
-    @Published var isPresentingHUDAppearance = false
-    @Published var isPresentingPrompts = false
-
     /// ⌥1 refine lifecycle: drives the HUD's live meter while the user
     /// dictates an instruction, the shimmering "Refining" label while the
     /// edit is in flight, and the brief "Done" confirmation after the paste.

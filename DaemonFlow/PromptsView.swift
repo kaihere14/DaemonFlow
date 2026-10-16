@@ -10,154 +10,77 @@
 import SwiftUI
 
 struct PromptsView: View {
-    var onClose: (() -> Void)?
-
     @EnvironmentObject private var store: PromptStore
 
-    /// Working copies. Edits stay here until Save, so backing out of a
-    /// half-written prompt is just closing the sheet.
+    @SceneStorage("selectedPrompt") private var kind: PromptKind = .dictationCleanup
+
+    /// Working copies, one per prompt. Edits stay here until Save, so
+    /// switching to another prompt mid-edit doesn't lose anything.
     @State private var drafts: [PromptKind: String] = [:]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            header
-
-            ScrollView {
-                VStack(spacing: 14) {
+        Form {
+            Section {
+                Picker("Prompt", selection: $kind) {
                     ForEach(PromptKind.allCases) { kind in
-                        promptCard(kind)
+                        Text(kind.title).tag(kind)
                     }
                 }
-                .padding(.bottom, 4)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            } footer: {
+                Text(kind.subtitle)
+            }
+
+            Section {
+                TextEditor(text: binding(for: kind))
+                    .font(.system(.body, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 280)
+            } header: {
+                HStack {
+                    Text("Instructions")
+                    Spacer()
+                    Text(statusLabel)
+                        .font(.caption)
+                        .foregroundStyle(hasUnsavedChanges ? .orange : .secondary)
+                }
             }
         }
-        .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.background)
-        .onAppear(perform: loadDrafts)
-    }
-
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Prompts")
-                    .font(Theme.Font.headerTitle)
-                    .foregroundStyle(Theme.textPrimary)
-                Text("The instructions sent to the cleanup model, one per action. Saved edits apply to the next dictation or refine — no restart needed.")
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer()
-
-            if let onClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 26, height: 26)
-                        .background(Theme.cardSurface, in: Circle())
-                        .overlay(Circle().stroke(Theme.cardBorder, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func promptCard(_ kind: PromptKind) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(kind.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(kind.subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 0)
-
-                if store.isCustomized(kind) {
-                    Text("Edited")
-                        .font(Theme.Font.monoLabel)
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .overlay(
-                            Capsule().stroke(Theme.accent.opacity(0.6), lineWidth: 1)
-                        )
-                }
-            }
-
-            TextEditor(text: binding(for: kind))
-                .font(Theme.Font.mono)
-                .foregroundStyle(Theme.textPrimary)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(height: 220)
-                .background(Theme.cardSurfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Theme.cardBorder, lineWidth: 1)
-                )
-
-            HStack(spacing: 10) {
-                Text(unsavedChanges(kind) ? "Unsaved changes" : "Saved")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.textSecondary.opacity(unsavedChanges(kind) ? 1 : 0.6))
-
-                Spacer()
-
-                actionButton(
-                    "Reset to Default",
-                    enabled: draft(for: kind) != kind.defaultText || store.isCustomized(kind)
-                ) {
+        .formStyle(.grouped)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button("Reset to Default") {
                     store.reset(kind)
                     drafts[kind] = kind.defaultText
                 }
+                .disabled(draft(for: kind) == kind.defaultText && !store.isCustomized(kind))
+                .help("Replace this prompt with the one DaemonFlow ships with")
 
-                actionButton("Save", enabled: unsavedChanges(kind), prominent: true) {
+                Button("Save") {
                     store.save(draft(for: kind), for: kind)
                     drafts[kind] = store.text(for: kind)
                 }
+                .keyboardShortcut("s")
+                .disabled(!hasUnsavedChanges)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Theme.cardBorder, lineWidth: 1)
-        )
+        .onAppear(perform: loadDrafts)
     }
 
-    private func actionButton(
-        _ title: String,
-        enabled: Bool,
-        prominent: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(enabled
-                             ? (prominent ? Theme.accent : Theme.textSecondary)
-                             : Theme.textSecondary.opacity(0.5))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(enabled && prominent ? Theme.accent : Theme.cardBorder, lineWidth: 1)
-            )
-            .disabled(!enabled)
+    private var hasUnsavedChanges: Bool {
+        draft(for: kind) != store.text(for: kind)
     }
 
-    // MARK: - Draft state
+    private var statusLabel: String {
+        // Reading `revision` keeps this live: the values come out of
+        // UserDefaults, which doesn't publish on its own.
+        _ = store.revision
+        if hasUnsavedChanges { return "Unsaved changes" }
+        return store.isCustomized(kind) ? "Edited" : "Default"
+    }
+
+    // MARK: - Drafts
 
     private func loadDrafts() {
         for kind in PromptKind.allCases where drafts[kind] == nil {
@@ -174,9 +97,5 @@ struct PromptsView: View {
             get: { draft(for: kind) },
             set: { drafts[kind] = $0 }
         )
-    }
-
-    private func unsavedChanges(_ kind: PromptKind) -> Bool {
-        draft(for: kind) != store.text(for: kind)
     }
 }

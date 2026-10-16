@@ -115,13 +115,17 @@ final class RecordingHUDController {
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
     }
 
     private func fadeOut() {
+        // Shorter than the fade in: leaving is the system tidying up, not
+        // something to watch.
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.25
+            context.duration = 0.15
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
@@ -174,8 +178,9 @@ struct HUDPill: View {
 
     /// One curve for the whole morph. `.smooth` is a spring with no
     /// overshoot — the pill settles into each size instead of snapping to
-    /// it, and the same animation runs on the way back down.
-    private static let morph = Animation.smooth(duration: 0.34)
+    /// it, and the same animation runs on the way back down. Kept under
+    /// 300ms: it answers a key press, so it has to feel immediate.
+    private static let morph = Animation.smooth(duration: 0.28)
 
     @State private var levelHistory: [Float] = Array(repeating: 0, count: barCount)
 
@@ -239,7 +244,7 @@ struct HUDPill: View {
                     Text("Done")
                         .font(.system(size: 11, weight: .semibold))
                 }
-                .foregroundStyle(Theme.successGreen)
+                .foregroundStyle(Color(nsColor: .systemGreen))
                 .transition(.opacity)
             case .idle, .hidden:
                 Color.clear
@@ -293,7 +298,7 @@ struct HUDPill: View {
                 waveform
                 Text(model.liveText)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
+                    .foregroundStyle(.white.opacity(0.95))
                     .lineLimit(2)
                     // Overflow drops the oldest words, so the newest ones —
                     // the ones the user is saying right now — stay visible.
@@ -363,11 +368,11 @@ private struct ShimmerText: View {
 
     var body: some View {
         label
-            .foregroundStyle(Theme.textSecondary.opacity(0.55))
+            .foregroundStyle(.white.opacity(0.45))
             .overlay(
                 GeometryReader { geo in
                     LinearGradient(
-                        colors: [.clear, Theme.textPrimary, .clear],
+                        colors: [.clear, .white, .clear],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
@@ -395,7 +400,7 @@ private struct HUDSpinner: View {
             .stroke(tint, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
             .frame(width: 12, height: 12)
             .rotationEffect(.degrees(spinning ? 360 : 0))
-            .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: spinning)
+            .animation(.linear(duration: 0.7).repeatForever(autoreverses: false), value: spinning)
             .onAppear { spinning = true }
     }
 }
