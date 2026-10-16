@@ -34,6 +34,12 @@ struct VocabularyView: View {
             }
 
             Section {
+                Toggle("Use text on screen", isOn: $store.usesScreenContext)
+            } footer: {
+                Text("While you dictate, unusual names and terms in the frontmost window — like \"Supabase\" in the doc you're editing — are used to fix how they're spelled. Password fields are never read, and nothing leaves your Mac.")
+            }
+
+            Section {
                 if store.terms.isEmpty {
                     Text("Add the spellings you keep fixing by hand.")
                         .foregroundStyle(.secondary)

@@ -13,11 +13,11 @@ actor WhisperTranscriber {
     private let engine = WhisperEngine()
     private var loadedModelPath: URL?
 
-    func transcribe(samples: [Float], modelPath: URL) throws -> String {
+    func transcribe(samples: [Float], modelPath: URL, prompt: String? = nil) throws -> String {
         if loadedModelPath != modelPath || !engine.isModelLoaded {
             try engine.loadModel(at: modelPath)
             loadedModelPath = modelPath
         }
-        return try engine.transcribe(samples: samples)
+        return try engine.transcribe(samples: samples, prompt: prompt)
     }
 }
